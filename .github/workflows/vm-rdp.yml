@@ -20,11 +20,19 @@ on:
         required: false
         default: ''
 
+permissions:
+  contents: write
+
 jobs:
   run-vm:
     runs-on: windows-latest
     timeout-minutes: 360 # Limite de 6 horas do GitHub Actions
     steps:
+      - name: Checkout Repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Ativar Remote Desktop (RDP) no Windows Runner
         shell: powershell
         run: |
@@ -42,50 +50,68 @@ jobs:
           $UserAccount | Set-LocalUser -Password $Password
           Write-Host "Conta runneradmin atualizada com a senha informada."
 
-      - name: Inicializar Túnel TCP (Ngrok ou Pinggy)
+      - name: Inicializar Túnel TCP (Ngrok) e Salvar Endpoint
         shell: powershell
         run: |
           $ngrokToken = "${{ github.event.inputs.ngrok_token }}"
           $vmId = "${{ github.event.inputs.vm_id }}"
 
-          if ($ngrokToken -ne "") {
-              Write-Host "Baixando e configurando Ngrok..."
-              Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
-              Expand-Archive -Path "ngrok.zip" -DestinationPath . -Force
-              .\ngrok.exe authtoken $ngrokToken
-              Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", ".\ngrok.exe tcp 3389"
-              Start-Sleep -Seconds 12
-              
+          if ($ngrokToken -eq "") {
+              $ngrokToken = "3KYU1ofJieGOm5fiURl1WtfSv3W_4KZhV1191DjgnNC3q9fz2"
+          }
+
+          Write-Host "Baixando Ngrok..."
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+          Expand-Archive -Path "ngrok.zip" -DestinationPath . -Force
+          .\ngrok.exe authtoken $ngrokToken
+          Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", ".\ngrok.exe tcp 3389"
+          Start-Sleep -Seconds 12
+
+          $endpoint = ""
+          try {
+              $tunnels = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels").tunnels
+              $publicUrl = $tunnels[0].public_url
+              $endpoint = $publicUrl -replace 'tcp://', ''
+              Write-Host "=========================================="
+              Write-Host ">>>VANTA_RDP_ENDPOINT: $endpoint<<<"
+              Write-Host "=========================================="
+          } catch {
+              Write-Host "Falha ao obter URL via Ngrok local."
+          }
+
+          if ($endpoint -ne "") {
+              $data = @{
+                  vm_id = $vmId
+                  endpoint = $endpoint
+                  status = "online"
+                  updated_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+              } | ConvertTo-Json
+
+              Set-Content -Path "endpoint.json" -Value $data
+
               try {
-                  $tunnels = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels").tunnels
-                  $publicUrl = $tunnels[0].public_url
-                  $endpoint = $publicUrl -replace 'tcp://', ''
-                  Write-Host "=========================================="
-                  Write-Host ">>>VANTA_RDP_ENDPOINT: $endpoint<<<"
-                  Write-Host "=========================================="
-                  Set-Content -Path "endpoint.txt" -Value $endpoint
-                  
-                  # Add to GitHub Job Summary
-                  "### 🚀 VANTA VM Online!" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-                  "- **Host RDP**: `$endpoint`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-                  "- **Usuário**: `runneradmin`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-                  "- **Senha**: `${{ github.event.inputs.vm_password }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+                  git config --global user.name "Vanta Bot"
+                  git config --global user.email "vanta@actions.github.com"
+                  git add endpoint.json
+                  git commit -m "Update RDP endpoint $endpoint [skip ci]"
+                  git push origin main
+                  Write-Host "Arquivo endpoint.json atualizado no repositório com sucesso!"
               } catch {
-                  Write-Host "Aviso: Falha ao obter endpoint via Ngrok API local."
+                  Write-Host "Aviso ao fazer commit do endpoint: $_"
               }
-          } else {
-              Write-Host "Iniciando túnel TCP gratuito via Pinggy..."
-              Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", "ssh -o StrictHostKeyChecking=no -p 443 -R0:localhost:3389 -R4300:localhost:4300 a.pinggy.io"
-              Start-Sleep -Seconds 12
-              Write-Host "Túnel Pinggy inicializado na porta 3389."
+
+              # Adicionar ao Resumo do GitHub
+              "### 🚀 VANTA Cloud VM Online!" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "- **Host RDP**: `$endpoint`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "- **Usuário**: `runneradmin`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              "- **Senha**: `${{ github.event.inputs.vm_password }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
 
       - name: Manter Máquina Virtual Ativa (Até 6 Horas)
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "MÁQUINA VIRTUAL EM EXECUÇÃO"
-          Write-Host "Tempo limite configurado para 6 horas (360 minutos)."
+          Write-Host "MÁQUINA VIRTUAL EM EXECUÇÃO (6 HORAS MÁXIMO)"
           Write-Host "=========================================="
           $timeout = 21600
           for ($i = 0; $i -lt $timeout; $i += 60) {
