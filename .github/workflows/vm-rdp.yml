@@ -50,34 +50,34 @@ jobs:
           $UserAccount | Set-LocalUser -Password $Password
           Write-Host "Conta runneradmin atualizada com a senha informada."
 
-      - name: Inicializar Túnel TCP (Ngrok) e Salvar Endpoint
+      - name: Inicializar Túnel TCP e Publicar Conexão RDP
         shell: powershell
         run: |
-          $ngrokToken = "${{ github.event.inputs.ngrok_token }}"
           $vmId = "${{ github.event.inputs.vm_id }}"
-
-          if ($ngrokToken -eq "") {
-              $ngrokToken = "3KYU1ofJieGOm5fiURl1WtfSv3W_4KZhV1191DjgnNC3q9fz2"
-          }
-
-          Write-Host "Baixando Ngrok..."
-          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
-          Expand-Archive -Path "ngrok.zip" -DestinationPath . -Force
-          .\ngrok.exe authtoken $ngrokToken
-          Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", ".\ngrok.exe tcp 3389"
-          Start-Sleep -Seconds 12
-
           $endpoint = ""
-          try {
-              $tunnels = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels").tunnels
-              $publicUrl = $tunnels[0].public_url
-              $endpoint = $publicUrl -replace 'tcp://', ''
-              Write-Host "=========================================="
-              Write-Host ">>>VANTA_RDP_ENDPOINT: $endpoint<<<"
-              Write-Host "=========================================="
-          } catch {
-              Write-Host "Falha ao obter URL via Ngrok local."
+
+          Write-Host "Baixando Túnel TCP de Alta Velocidade (Bore)..."
+          Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip" -OutFile "bore.zip"
+          Expand-Archive -Path "bore.zip" -DestinationPath . -Force
+
+          Start-Process -FilePath "powershell" -ArgumentList "-Command", ".\bore.exe local 3389 --to bore.pub > bore.log 2>&1"
+          Start-Sleep -Seconds 6
+
+          for ($i = 0; $i -lt 12; $i++) {
+              if (Test-Path "bore.log") {
+                  $logContent = Get-Content "bore.log" -Raw
+                  if ($logContent -match 'listening at (bore\.pub:\d+)') {
+                      $endpoint = $Matches[1]
+                      Write-Host "Túnel TCP estabelecido: $endpoint"
+                      break
+                  }
+              }
+              Start-Sleep -Seconds 2
           }
+
+          Write-Host "=========================================="
+          Write-Host ">>>VANTA_RDP_ENDPOINT: $endpoint<<<"
+          Write-Host "=========================================="
 
           if ($endpoint -ne "") {
               $data = @{
