@@ -1,0 +1,94 @@
+name: Vanta Cloud VM Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      vm_id:
+        description: 'Identificador único da VM'
+        required: false
+        default: 'vanta-vm-01'
+      vm_password:
+        description: 'Senha de Administrador do RDP'
+        required: true
+        default: 'Vanta@2026!Pass'
+      os_type:
+        description: 'Tipo de Sistema Operacional'
+        required: false
+        default: 'Windows 11 Pro'
+      ngrok_token:
+        description: 'Ngrok Auth Token (Tunnel TCP)'
+        required: false
+        default: ''
+
+jobs:
+  run-vm:
+    runs-on: windows-latest
+    timeout-minutes: 360 # Limite de 6 horas do GitHub Actions
+    steps:
+      - name: Ativar Remote Desktop (RDP) no Windows Runner
+        shell: powershell
+        run: |
+          Write-Host "Configurando Terminal Server e Firewall..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+          Write-Host "Serviço RDP configurado na porta 3389."
+
+      - name: Configurar Senha do Administrador runneradmin
+        shell: powershell
+        run: |
+          $Password = ConvertTo-SecureString "${{ github.event.inputs.vm_password }}" -AsPlainText -Force
+          $UserAccount = Get-LocalUser -Name "runneradmin"
+          $UserAccount | Set-LocalUser -Password $Password
+          Write-Host "Conta runneradmin atualizada com a senha informada."
+
+      - name: Inicializar Túnel TCP (Ngrok ou Pinggy)
+        shell: powershell
+        run: |
+          $ngrokToken = "${{ github.event.inputs.ngrok_token }}"
+          $vmId = "${{ github.event.inputs.vm_id }}"
+
+          if ($ngrokToken -ne "") {
+              Write-Host "Baixando e configurando Ngrok..."
+              Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+              Expand-Archive -Path "ngrok.zip" -DestinationPath . -Force
+              .\ngrok.exe authtoken $ngrokToken
+              Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", ".\ngrok.exe tcp 3389"
+              Start-Sleep -Seconds 12
+              
+              try {
+                  $tunnels = (Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels").tunnels
+                  $publicUrl = $tunnels[0].public_url
+                  $endpoint = $publicUrl -replace 'tcp://', ''
+                  Write-Host "=========================================="
+                  Write-Host ">>>VANTA_RDP_ENDPOINT: $endpoint<<<"
+                  Write-Host "=========================================="
+                  Set-Content -Path "endpoint.txt" -Value $endpoint
+                  
+                  # Add to GitHub Job Summary
+                  "### 🚀 VANTA VM Online!" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+                  "- **Host RDP**: `$endpoint`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+                  "- **Usuário**: `runneradmin`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+                  "- **Senha**: `${{ github.event.inputs.vm_password }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+              } catch {
+                  Write-Host "Aviso: Falha ao obter endpoint via Ngrok API local."
+              }
+          } else {
+              Write-Host "Iniciando túnel TCP gratuito via Pinggy..."
+              Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", "ssh -o StrictHostKeyChecking=no -p 443 -R0:localhost:3389 -R4300:localhost:4300 a.pinggy.io"
+              Start-Sleep -Seconds 12
+              Write-Host "Túnel Pinggy inicializado na porta 3389."
+          }
+
+      - name: Manter Máquina Virtual Ativa (Até 6 Horas)
+        shell: powershell
+        run: |
+          Write-Host "=========================================="
+          Write-Host "MÁQUINA VIRTUAL EM EXECUÇÃO"
+          Write-Host "Tempo limite configurado para 6 horas (360 minutos)."
+          Write-Host "=========================================="
+          $timeout = 21600
+          for ($i = 0; $i -lt $timeout; $i += 60) {
+              Start-Sleep -Seconds 60
+              Write-Host "[VANTA] VM ativa... ($i s decorridos)"
+          }
