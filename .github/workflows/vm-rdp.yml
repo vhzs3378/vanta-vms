@@ -43,38 +43,46 @@ jobs:
           Write-Host "Conta runneradmin configurada."
 
       - name: Inicializar Tunel TCP Bore
-        shell: powershell
+        shell: python
         run: |
-          Write-Host "Baixando binario bore..."
-          Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip" -OutFile "bore.zip"
-          Expand-Archive -Path "bore.zip" -DestinationPath . -Force
+          import urllib.request, zipfile, subprocess, time, re, json, os
 
-          $job = Start-Job -ScriptBlock { .\bore.exe local 3389 --to bore.pub }
-          Start-Sleep -Seconds 6
+          print("Baixando binario bore...")
+          url = "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip"
+          urllib.request.urlretrieve(url, "bore.zip")
+          with zipfile.ZipFile("bore.zip", "r") as z:
+              z.extractall(".")
 
-          $endpoint = ""
-          for ($i = 0; $i -lt 15; $i++) {
-              $output = Receive-Job -Job $job -Keep | Out-String
-              if ($output -match 'listening at (bore\.pub:\d+)') {
-                  $endpoint = $Matches[1]
-                  Write-Host "=========================================="
-                  Write-Host "VANTA_RDP_HOST=$endpoint"
-                  Write-Host "=========================================="
-                  break
-              }
-              Start-Sleep -Seconds 2
-          }
+          bore_exe = os.path.abspath("bore.exe")
+          log_file = open("bore.log", "w", encoding="utf-8")
+          proc = subprocess.Popen([bore_exe, "local", "3389", "--to", "bore.pub"], stdout=log_file, stderr=subprocess.STDOUT)
 
-          if ($endpoint -eq "") {
-              $endpoint = "bore.pub:38491"
-          }
+          endpoint = ""
+          for attempt in range(15):
+              time.sleep(2)
+              if os.path.exists("bore.log"):
+                  with open("bore.log", "r", encoding="utf-8") as f:
+                      content = f.read()
+                      m = re.search(r"listening at (bore\.pub:\d+)", content)
+                      if m:
+                          endpoint = m.group(1)
+                          print(f"Tunel Bore ativo: {endpoint}")
+                          break
 
-          Set-Content -Path "endpoint.txt" -Value $endpoint
+          if not endpoint:
+              endpoint = "bore.pub:38491"
 
-          "### 🚀 VANTA Cloud VM Online!" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- **Host RDP**: `$endpoint`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- **Usuario**: `runneradmin`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-          "- **Senha**: `${{ github.event.inputs.vm_password }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          print(f"==========================================")
+          print(f">>>VANTA_RDP_ENDPOINT: {endpoint}<<<")
+          print(f"==========================================")
+
+          with open("endpoint.txt", "w", encoding="utf-8") as f:
+              f.write(endpoint)
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as f:
+                  f.write(f"### 🚀 VANTA Cloud VM Online!\n- **Host RDP**: `{endpoint}`\n- **Usuario**: `runneradmin`\n")
 
       - name: Salvar Endpoint como Artefato
         uses: actions/upload-artifact@v4
