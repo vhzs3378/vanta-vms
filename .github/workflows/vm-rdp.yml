@@ -34,6 +34,21 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
           Write-Host "RDP habilitado com sucesso."
 
+      - name: Otimizar Windows para Máxima Performance (CPU, RAM e 60 FPS RDP)
+        shell: powershell
+        run: |
+          Write-Host "Aplicando plano de Desempenho Maximo..."
+          powercfg -duplicatescheme e9a42b02-d5df-443d-be00-719c82a57e48 2>$null
+          powercfg -setactive e9a42b02-d5df-443d-be00-719c82a57e48 2>$null
+
+          Write-Host "Ativando taxa de 60 FPS no RDP..."
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations' -Name 'DWMFRAMEINTERVAL' -PropertyType 'DWord' -Value 15 -Force 2>$null
+
+          New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Force 2>$null
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name 'fEnableRemoteFXAdvancedRemoteFX' -Value 1 2>$null
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name 'SelectNetworkDetectMode' -Value 1 2>$null
+          Write-Host "Otimizacoes aplicadas com sucesso."
+
       - name: Configurar Senha do Administrador runneradmin
         shell: powershell
         run: |
@@ -82,7 +97,7 @@ jobs:
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as f:
-                  f.write(f"### 🚀 VANTA Cloud VM Online!\n- **Host RDP**: `{endpoint}`\n- **Usuario**: `runneradmin`\n")
+                  f.write(f"### 🚀 VANTA Cloud VM Online (Alta Performance)!\n- **Host RDP**: `{endpoint}`\n- **Usuario**: `runneradmin`\n")
 
       - name: Salvar Endpoint como Artefato
         uses: actions/upload-artifact@v4
