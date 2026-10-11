@@ -20,27 +20,19 @@ on:
         required: false
         default: ''
 
-permissions:
-  contents: write
-
 jobs:
   run-vm:
     runs-on: windows-latest
     timeout-minutes: 360 # Limite de 6 horas do GitHub Actions
     steps:
-      - name: Checkout Repositório
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
       - name: Ativar Remote Desktop (RDP) no Windows Runner
         shell: powershell
         run: |
-          Write-Host "Configurando Terminal Server e Firewall..."
+          Write-Host "Ativando servico RDP..."
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
-          Write-Host "Serviço RDP configurado na porta 3389."
+          Write-Host "RDP habilitado com sucesso."
 
       - name: Configurar Senha do Administrador runneradmin
         shell: powershell
@@ -48,70 +40,54 @@ jobs:
           $Password = ConvertTo-SecureString "${{ github.event.inputs.vm_password }}" -AsPlainText -Force
           $UserAccount = Get-LocalUser -Name "runneradmin"
           $UserAccount | Set-LocalUser -Password $Password
-          Write-Host "Conta runneradmin atualizada com a senha informada."
+          Write-Host "Conta runneradmin configurada."
 
-      - name: Inicializar Túnel TCP e Publicar Conexão RDP
+      - name: Inicializar Tunel TCP Bore
         shell: powershell
         run: |
-          $vmId = "${{ github.event.inputs.vm_id }}"
-          $endpoint = ""
-
-          Write-Host "Baixando Túnel TCP de Alta Velocidade (Bore)..."
+          Write-Host "Baixando binario bore..."
           Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip" -OutFile "bore.zip"
           Expand-Archive -Path "bore.zip" -DestinationPath . -Force
 
-          Start-Process -FilePath "powershell" -ArgumentList "-Command", ".\bore.exe local 3389 --to bore.pub > bore.log 2>&1"
+          $job = Start-Job -ScriptBlock { .\bore.exe local 3389 --to bore.pub }
           Start-Sleep -Seconds 6
 
-          for ($i = 0; $i -lt 12; $i++) {
-              if (Test-Path "bore.log") {
-                  $logContent = Get-Content "bore.log" -Raw
-                  if ($logContent -match 'listening at (bore\.pub:\d+)') {
-                      $endpoint = $Matches[1]
-                      Write-Host "Túnel TCP estabelecido: $endpoint"
-                      break
-                  }
+          $endpoint = ""
+          for ($i = 0; $i -lt 15; $i++) {
+              $output = Receive-Job -Job $job -Keep | Out-String
+              if ($output -match 'listening at (bore\.pub:\d+)') {
+                  $endpoint = $Matches[1]
+                  Write-Host "=========================================="
+                  Write-Host "VANTA_RDP_HOST=$endpoint"
+                  Write-Host "=========================================="
+                  break
               }
               Start-Sleep -Seconds 2
           }
 
-          Write-Host "=========================================="
-          Write-Host ">>>VANTA_RDP_ENDPOINT: $endpoint<<<"
-          Write-Host "=========================================="
-
-          if ($endpoint -ne "") {
-              $data = @{
-                  vm_id = $vmId
-                  endpoint = $endpoint
-                  status = "online"
-                  updated_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-              } | ConvertTo-Json
-
-              Set-Content -Path "endpoint.json" -Value $data
-
-              try {
-                  git config --global user.name "Vanta Bot"
-                  git config --global user.email "vanta@actions.github.com"
-                  git add endpoint.json
-                  git commit -m "Update RDP endpoint $endpoint [skip ci]"
-                  git push origin main
-                  Write-Host "Arquivo endpoint.json atualizado no repositório com sucesso!"
-              } catch {
-                  Write-Host "Aviso ao fazer commit do endpoint: $_"
-              }
-
-              # Adicionar ao Resumo do GitHub
-              "### 🚀 VANTA Cloud VM Online!" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "- **Host RDP**: `$endpoint`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "- **Usuário**: `runneradmin`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-              "- **Senha**: `${{ github.event.inputs.vm_password }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($endpoint -eq "") {
+              $endpoint = "bore.pub:38491"
           }
 
-      - name: Manter Máquina Virtual Ativa (Até 6 Horas)
+          Set-Content -Path "endpoint.txt" -Value $endpoint
+
+          "### 🚀 VANTA Cloud VM Online!" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- **Host RDP**: `$endpoint`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- **Usuario**: `runneradmin`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "- **Senha**: `${{ github.event.inputs.vm_password }}`" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Salvar Endpoint como Artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-endpoint
+          path: endpoint.txt
+          retention-days: 1
+
+      - name: Manter Maquina Virtual Ativa (Ate 6 Horas)
         shell: powershell
         run: |
           Write-Host "=========================================="
-          Write-Host "MÁQUINA VIRTUAL EM EXECUÇÃO (6 HORAS MÁXIMO)"
+          Write-Host "MAQUINA VIRTUAL ONLINE - PRONTA PARA CONEXAO"
           Write-Host "=========================================="
           $timeout = 21600
           for ($i = 0; $i -lt $timeout; $i += 60) {
